@@ -1,3 +1,7 @@
+/*
+LINE DETECTION IN EMPTY + NON EMPTY -> 2 IMAGE VERSION
+*/
+
 #include <opencv2/opencv.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
@@ -12,34 +16,47 @@ const int CHUNK_WIDTH = 25;
 const int CUTOFF = 50;
 const int DISTANCE = 5;
 int JUMP = 3;
-const int EROSION_SIZE = 5;
-const int DILATION_SIZE = 5;
+const int EROSION_SIZE = 1;
 const int EROSION_TYPE = cv::MORPH_ELLIPSE;
+const int DILATION_SIZE = 1;
 const int DILATION_TYPE = cv::MORPH_ELLIPSE;
 const int THRESHOLD = 125;
-const int THRESHHOLD_INV = 50;
+
+double distance(cv::Point2f p0, cv::Point2f p1)
+{
+	double dX0 = p0.x, dY0 = p0.y, dX1 = p1.x, dY1 = p1.y;
+	return std::sqrt((dX1 - dX0)*(dX1 - dX0) + (dY1 - dY0)*(dY1 - dY0));
+}
 
 class PLApplication
 {
 public:
-	enum{ NOT_SET = 0, IN_PROCESS = 1, SET = 2 };
 	cv::Mat image; //Loaded Image
+	cv::Mat image_empty; // Empty parking lot
 	cv::Mat roi; // Region of Interest for Homography
-	cv::Mat gray_roi; // GrayScale ROI for Thresholding
-
+	cv::Mat roi_gray;
+	cv::Mat roi_empty;
+	cv::Mat roi_empty_gray;
+	
 	std::vector<cv::Point2f> corners;
 	std::vector<cv::Point2f> spots;
+	std::vector<cv::Point2f> parking_lines;
+	std::vector<cv::Rect> parking_spots;
 
 	void reset();
-	void init(cv::Mat _image);
+	void init(cv::Mat _image, cv::Mat _image_empty);
 	void countCars();
 	int getTotalCars();
 private:
-	bool can_count;
 	int total_cars = 0;
-	void analyzeSpot(cv::Point2f point);
-	bool hasCar(cv::Scalar _mean);
-
+	bool can_count_line;
+	void detectLines();
+	void filterLines();
+	void createSpots();
+	void filterSpots();
+	float averageSpotWidth();
+	float averageLineDistance();
+	void analyzeSpot(cv::Rect rect);
 };
 
 PLApplication plapp;
@@ -67,36 +84,83 @@ void selectSpots(int event, int x, int y, int flags, void* param)
 	}
 }
 
-void PLApplication::init(cv::Mat _image)
+void PLApplication::init(cv::Mat _image, cv::Mat _image_empty)
 {
 	_image.copyTo(image);
-	can_count = true;
+	_image_empty.copyTo(image_empty);
+	can_count_line = true;
 }
 
-void PLApplication::countCars()
+int PLApplication::getTotalCars()
 {
-	std::cout << "COUNTING CARS" << std::endl;
-	
+	return total_cars;
+}
+
+float PLApplication::averageSpotWidth()
+{
+	float sum = 0;
+	for (int i = 0; i < parking_spots.size(); i++)
+	{
+		sum += parking_spots[i].width;
+	}
+	std::cout << "SUM: " << sum << std::endl;
+	std::cout << "SPOTS " << parking_spots.size() << std::endl;
+	return sum / parking_spots.size();
+}
+
+float PLApplication::averageLineDistance()
+{
+	float sum = 0;
+	int n_of_spots = 0;
+
+	for (int i = 0; i < spots.size(); i++)
+	{
+		for (int k = 0; k < parking_lines.size() - 1; k++)
+		{
+			if (parking_lines[i].x == parking_lines[i + 1].x)
+			{
+				sum += distance(parking_lines[i], parking_lines[i + 1]);
+				n_of_spots++;
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+
+	float average = sum / n_of_spots;
+	std::cout << "NUMBER OF SPOTS:" << n_of_spots << std::endl;
+	std::cout << "AVERAGE:" << n_of_spots << std::endl;
+	return average;
+}
+
+void PLApplication::detectLines()
+{
+	std::cout << "DETECTING LINES" << std::endl;
 	for (int i = 0; i < spots.size(); i++)
 	{
 		cv::Point2f point = spots[i];
 		cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
 		cv::Rect rectLine;
-		cv::Rect rectSquare;
 		for (;;)
 		{
-			rectSquare = cv::Rect(point.x /*- (CHUNK_WIDTH / 2.0)*/, point.y - (CHUNK_HEIGHT / 2.0), CHUNK_WIDTH, CHUNK_HEIGHT);
 			rectLine = cv::Rect(point.x + JUMP, point.y - (CHUNK_HEIGHT / 2.0), JUMP, CHUNK_HEIGHT);
-			if ((rectLine & rect_mat) == rectLine && (rectSquare & rect_mat) == rectSquare)
+			if ((rectLine & rect_mat) == rectLine)
 			{
-				cv::Mat line = gray_roi(rectLine);
-				if (cv::mean(line)[0] > 0)
+				cv::Mat line = roi_empty_gray(rectLine);
+				if (cv::mean(line)[0] > 0 && can_count_line) // line
 				{
-					analyzeSpot(point);
+					can_count_line = false;
+					circle(roi, point, 2, RED, 2, CV_AA);
+					cv::imshow("RESULT", roi);
+					circle(roi_empty, point, 2, RED, 2, CV_AA);
+					cv::imshow("RESULT__", roi_empty);
+					parking_lines.push_back(cv::Point2f(point.x + 5, point.y));
 				}
-				else
+				else if (cv::mean(line)[0] == 0)
 				{
-					can_count = true;
+					can_count_line = true;
 				}
 				point = cv::Point2f(point.x + JUMP, point.y);
 			}
@@ -108,60 +172,81 @@ void PLApplication::countCars()
 	}
 }
 
-void PLApplication::analyzeSpot(cv::Point2f point)
+
+
+void PLApplication::filterLines()
 {
-	cv::Rect rect;
-	rect.x = point.x;// -(CHUNK_WIDTH / 2.0);
-	rect.y = point.y - (CHUNK_HEIGHT / 2.0);
-	rect.width = CHUNK_WIDTH;
-	rect.height = CHUNK_HEIGHT;
-	
-	cv::Mat sample_roi = plapp.gray_roi(rect);
-	cv::Scalar roi_mean = mean(sample_roi);
-	
-	if (hasCar(roi_mean))
+	float average = averageLineDistance();
+}
+
+void PLApplication::createSpots()
+{
+	cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
+	for (int i = 0; i < parking_lines.size() - 1; i++)
 	{
-		std::cout << "FOUND 1" << std::endl;
-		total_cars++;
+		cv::Point2f p1 = parking_lines[i];
+		cv::Point2f p2 = parking_lines[i + 1];
+		cv::Rect parking_spot = cv::Rect(p1.x, p1.y - CHUNK_HEIGHT / 2.0, distance(p1, p2), CHUNK_HEIGHT);
+		if ((parking_spot & rect_mat) == parking_spot)
+		{
+			std::cout << "ADDING A SPOT" << std::endl;
+			parking_spots.push_back(parking_spot);
+		}
+	}
+}
+
+void PLApplication::filterSpots()
+{
+	std::cout << "FILTETING SPOTS" << std::endl;
+	std::vector<cv::Rect> new_parking_spots;
+	float average = averageSpotWidth();
+	std::cout << "AVERAGE: " << average << std::endl;
+	for (int i = 0; i < parking_spots.size(); i++)
+	{
+		if (parking_spots[i].width > (average / 2.0))
+		{
+			new_parking_spots.push_back(parking_spots[i]);
+		}
+	}
+	parking_spots = new_parking_spots;
+}
+
+void PLApplication::countCars()
+{
+	std::cout << "COUNTING CARS" << std::endl;
+	
+	detectLines();
+	//filterLines();
+	createSpots();
+	filterSpots();
+
+	cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
+
+	for (int i = 0; i < parking_spots.size(); i++)
+	{
+		analyzeSpot(parking_spots[i]);
+	}
+}
+
+void PLApplication::analyzeSpot(cv::Rect rect)
+{
+	cv::Mat parking_spot = roi_gray(rect);
+	cv::Scalar _mean = mean(parking_spot);
+	std::cout << "MEAN :" << _mean << std::endl;
+	if (_mean[0] < 95 || _mean[0] > 120)
+	{
 		cv::rectangle(roi, rect, GREEN, 2);
-		JUMP = 3;
+		imshow("RESULT", roi);
+		total_cars++;
 	}
-	imshow("RESULT", roi);
-}
-
-bool PLApplication::hasCar(cv::Scalar _mean)
-{
-	std::cout << "MEAN: " << _mean << std::endl;
-	
-	if (_mean[0] > CUTOFF && can_count)
-	{
-		can_count = false;
-		return true;
-	}
-	else if (_mean[0] < CUTOFF)
-	{
-		can_count = true;
-		return false;
-	}
-	return false;
-}
-
-int PLApplication::getTotalCars()
-{
-	return total_cars;
-}
-
-double distance(cv::Point2f p0, cv::Point2f p1)
-{
-	double dX0 = p0.x, dY0 = p0.y, dX1 = p1.x, dY1 = p1.y;
-	return std::sqrt((dX1 - dX0)*(dX1 - dX0) + (dY1 - dY0)*(dY1 - dY0));
 }
 
 int main(int argc, char** argv)
 {
-	cv::Mat src = cv::imread(argv[1]);
+	cv::Mat image = cv::imread(argv[1]);
+	cv::Mat image_empty = cv::imread("lot_empty.jpg");
 	
-	plapp.init(src);
+	plapp.init(image, image_empty);
 	
 	std::cout << "Click on four corners -- top left first and bottom left last -- and then hit ENTER" << std::endl;
 
@@ -170,13 +255,15 @@ int main(int argc, char** argv)
 	// Set the callback function for any mouse event
 	cv::setMouseCallback("PARKING LOT", selectCorners, 0);
 	cv::waitKey(0);
-	cvDestroyWindow("PARKING_LOT");
+	cvDestroyWindow("PARKING LOT");
 
 	float sizeW = distance(plapp.corners[0], plapp.corners[1]);
 	float sizeH = distance(plapp.corners[1], plapp.corners[2]);
 
 	cv::Size size(sizeW, sizeH);
 	cv::Mat dst = cv::Mat::zeros(size, CV_8UC3);
+	cv::Mat dst_empty = cv::Mat::zeros(size, CV_8UC3);
+
 	// Create a vector of destination points
 	std::vector<cv::Point2f> cornersDst;
 
@@ -189,30 +276,25 @@ int main(int argc, char** argv)
 	cv::Mat h = cv::findHomography(plapp.corners, cornersDst);
 
 	// Warp source image to destination
-	warpPerspective(src, dst, h, size);
+	warpPerspective(image, dst, h, size);
+	warpPerspective(image_empty, dst_empty, h, size);
 
 	dst.copyTo(plapp.roi);
+	dst_empty.copyTo(plapp.roi_empty);
 	// Show image
-	cv::imshow("RESULT", dst);
+	cv::imshow("RESULT", plapp.roi);
 	//GrayScale for thresholding
-	cv::Mat thresh, thresh_inv;
-	cv::cvtColor(dst, dst, CV_BGR2GRAY);
-	cv::threshold(dst, thresh, THRESHOLD, 255, cv::THRESH_BINARY);
-	cv::threshold(dst, thresh_inv, THRESHHOLD_INV, 255, cv::THRESH_BINARY_INV);
+	cv::cvtColor(plapp.roi_empty, plapp.roi_empty_gray, CV_BGR2GRAY);
+	cv::cvtColor(plapp.roi, plapp.roi_gray, CV_BGR2GRAY);
+	cv::threshold(plapp.roi_empty_gray, plapp.roi_empty_gray, THRESHOLD, 255, cv::THRESH_BINARY);
 	
-	cv::Mat erosion_element = cv::getStructuringElement(EROSION_TYPE, cv::Size(2 * EROSION_SIZE + 1, 2 * EROSION_SIZE + 1), cv::Point(EROSION_SIZE, EROSION_SIZE));
-	cv::erode(thresh, thresh, erosion_element);
-	cv::erode(thresh_inv, thresh_inv, erosion_element);
+	//cv::Mat erosion_element = cv::getStructuringElement(EROSION_TYPE, cv::Size(2 * EROSION_SIZE + 1, 2 * EROSION_SIZE + 1), cv::Point(EROSION_SIZE, EROSION_SIZE));
+	//cv::erode(plapp.roi_empty_gray, plapp.roi_empty_gray, erosion_element);
 	cv::Mat dilation_element = cv::getStructuringElement(DILATION_TYPE, cv::Size(2 * DILATION_SIZE + 1, 2 * DILATION_SIZE + 1), cv::Point(DILATION_SIZE, DILATION_SIZE));
-	cv::dilate(thresh, thresh, dilation_element);
-	cv::erode(thresh_inv, thresh_inv, erosion_element);
+	cv::dilate(plapp.roi_empty_gray, plapp.roi_empty_gray, dilation_element);
 
-	cv::Mat sum_mat = thresh; //+ thresh_inv;
-	sum_mat.copyTo(plapp.gray_roi);
-
-	//cv::imshow("THESH", thresh);
-	//cv::imshow("THESH_INV", thresh_inv);
-	cv::imshow("SUM_MAT", sum_mat);
+	imshow("GRAY", plapp.roi_empty_gray);
+	imshow("GRAY ROI", plapp.roi_gray);
 
 	cv::setMouseCallback("RESULT", selectSpots, 0);
 	cv::waitKey(0);
@@ -223,284 +305,3 @@ int main(int argc, char** argv)
 	cv::waitKey(0);
 	return 0;
 }
-
-/*
-#include "opencv2/core.hpp"
-#include "opencv2/highgui.hpp"
-#include "opencv2/imgproc.hpp"
-#include <iostream>
-
-using namespace std;
-using namespace cv;
-
-const Scalar RED = Scalar(0, 0, 255);
-const Scalar PINK = Scalar(230, 130, 255);
-const Scalar BLUE = Scalar(255, 0, 0);
-const Scalar LIGHTBLUE = Scalar(255, 255, 160);
-const Scalar GREEN = Scalar(0, 255, 0);
-
-class PLApplication
-{
-public:
-	enum{ NOT_SET = 0, IN_PROCESS = 1, SET = 2 };
-	Mat image;
-	Mat roi;
-	Mat gray_roi;
-
-	void reset();
-	void setImageAndWinName(Mat _image, const string& _winName);
-	void showImage() const;
-	void showROI() const;
-	void mouseClick(int event, int x, int y, int flags, void* param);
-private:
-	void setRectInMask();
-	void setSampleRectInMask();
-	void divideROIWithSample();
-	void countCars(vector<Mat> spaces, Scalar mean);
-
-	const string* winName;
-
-	uchar rectState;
-	uchar sampleState;
-	bool isInitialized;
-
-	Rect rect;
-	Rect sampleRect;
-
-	Scalar emptyMean;
-};
-PLApplication plapp;
-
-static void on_mouse(int event, int x, int y, int flags, void* param)
-{
-	plapp.mouseClick(event, x, y, flags, param);
-}
-
-int main(int argc, char** argv)
-{
-	string filename = argv[1];
-	if (filename.empty())
-	{
-		cout << "Empty filename" << endl;
-		return 1;
-	}
-
-	Mat image = imread(filename, 1);
-
-	if (image.empty())
-	{
-		cout << "Couldn't read image filename " << filename << endl;
-		return 1;
-	}
-
-	const string winName = "PARKING LOT";
-	namedWindow(winName, WINDOW_AUTOSIZE);
-	setMouseCallback(winName, on_mouse, 0);
-
-	plapp.setImageAndWinName(image, winName);
-	plapp.showImage();
-
-	waitKey(0);
-	return 0;
-}
-
-void PLApplication::reset()
-{
-	isInitialized = false;
-	rectState = NOT_SET;
-	sampleState = NOT_SET;
-}
-
-void PLApplication::setImageAndWinName(Mat _image, const string& _winName)
-{
-	image = _image;
-	winName = &_winName;
-	reset();
-}
-
-void PLApplication::showImage() const
-{
-	if (image.empty() || winName->empty())
-		return;
-
-	Mat res;
-	Mat binMask;
-	if (!isInitialized)
-		image.copyTo(res);
-	else
-	{
-		image.copyTo(res, binMask);
-	}
-
-	if (rectState == IN_PROCESS || rectState == SET)
-		rectangle(res, Point(rect.x, rect.y), Point(rect.x + rect.width, rect.y + rect.height), GREEN, 2);
-
-	imshow("PARKING LOT", res);
-}
-
-void PLApplication::showROI() const
-{
-	if (roi.empty())
-		return;
-
-	Mat res;
-	Mat binMask;
-	if (!isInitialized)
-		roi.copyTo(res);
-	else
-	{
-		roi.copyTo(res, binMask);
-	}
-
-	if (rectState == SET && (sampleState == IN_PROCESS || sampleState == SET))
-		rectangle(res, Point(sampleRect.x, sampleRect.y), Point(sampleRect.x + sampleRect.width, sampleRect.y + sampleRect.height), GREEN, 2);
-
-	imshow("ROI", res);
-}
-
-void PLApplication::setRectInMask()
-{
-	rect.x = max(0, rect.x);
-	rect.y = max(0, rect.y);
-	rect.width = min(rect.width, image.cols - rect.x);
-	rect.height = min(rect.height, image.rows - rect.y);
-
-	//
-	roi = image(rect);
-	namedWindow("ROI", WINDOW_AUTOSIZE);
-	imshow("ROI", roi);
-
-	//computeHistogram(roi, true);
-	cvtColor(roi, gray_roi, CV_BGR2GRAY);
-	//computeHistogram(grayImage, false);
-
-	Mat thres, invThresh;
-	threshold(gray_roi, thres, 125, 255, THRESH_BINARY);
-	threshold(gray_roi, invThresh, 75, 255, THRESH_BINARY_INV);
-
-	imshow("THRESH", thres);
-	imshow("THRESH_INV", invThresh);
-	
-	Mat sumMat = thres + invThresh;
-
-	imshow("SUM", sumMat);
-
-	int erosion_type = MORPH_ELLIPSE;
-	int erosion_size = 2;
-
-	Mat element = getStructuringElement(erosion_type, Size(2 * erosion_size + 1, 2 * erosion_size + 1), Point(erosion_size, erosion_size));
-
-	/// Apply the erosion operation
-	erode(sumMat, sumMat, element);
-
-	cout << "MEAN OF ROI " << mean(gray_roi) << endl;
-	
-	//setMouseCallback("ROI", on_mouse, 0);
-}
-
-void PLApplication::setSampleRectInMask()
-{
-	sampleRect.x = max(0, sampleRect.x);
-	sampleRect.y = max(0, sampleRect.y);
-	sampleRect.width = min(sampleRect.width, roi.cols - sampleRect.x);
-	sampleRect.height = min(sampleRect.height, roi.rows - sampleRect.y);
-
-	//
-	Mat newRoi = roi(sampleRect);
-	imshow("ROI_OF_ROI", newRoi);
-
-	Mat grayImage;
-	cvtColor(newRoi, grayImage, CV_BGR2GRAY);
-
-	cout << "MEAN OF ROI OF ROI: " << mean(grayImage) << endl;
-
-	emptyMean = mean(grayImage);
-
-	divideROIWithSample();
-}
-
-void PLApplication::mouseClick(int event, int x, int y, int flags, void*)
-{
-	switch (event)
-	{
-	case EVENT_LBUTTONDOWN:
-		if (rectState == NOT_SET)
-		{
-			rectState = IN_PROCESS;
-			rect = Rect(x, y, 1, 1);
-		}
-		else if (rectState == SET)
-		{
-			if (sampleState == NOT_SET)
-			{
-				sampleState = IN_PROCESS;
-				sampleRect = Rect(x, y, 1, 1);
-			}
-		}
-		break;
-	case EVENT_LBUTTONUP:
-		if (rectState == IN_PROCESS)
-		{
-			rect = Rect(Point(rect.x, rect.y), Point(x, y));
-			rectState = SET;
-			setRectInMask();
-			showImage();
-		}
-		else if (rectState == SET)
-		{
-			if (sampleState == IN_PROCESS)
-			{
-				sampleRect = Rect(Point(sampleRect.x, sampleRect.y), Point(x, y));
-				sampleState = SET;
-				setSampleRectInMask();
-				showROI();
-			}
-		}
-		break;
-	case EVENT_MOUSEMOVE:
-		if (rectState == IN_PROCESS)
-		{
-			rect = Rect(Point(rect.x, rect.y), Point(x, y));
-			showImage();
-		}
-		else if (rectState == SET)
-		{
-			if (sampleState == IN_PROCESS){
-				sampleRect = Rect(Point(sampleRect.x, sampleRect.y), Point(x, y));
-				showROI();
-			}
-		}
-		break;
-	}
-}
-
-void PLApplication::divideROIWithSample()
-{
-	vector<Mat> grid;
-	Rect rect_mat(0, 0, roi.cols, roi.rows);
-
-	for (int y = 0; y < roi.rows; y += sampleRect.height)
-	{
-		for (int x = 0; x < roi.cols; x += sampleRect.width)
-		{
-			Rect rect = Rect(x, y, sampleRect.width, sampleRect.height);
-			if ((rect & rect_mat) == rect){
-				rectangle(roi, Point(x, y), Point(x + rect.width, y + rect.height), GREEN, 2);
-				grid.push_back(Mat(gray_roi, rect));
-			}
-		}
-	}
-
-	countCars(grid, emptyMean);
-}
-
-void PLApplication::countCars(vector<Mat> spaces, Scalar em)
-{
-	for each(Mat m in spaces)
-	{
-		Scalar spaceMean = mean(m);
-		Scalar subMean = spaceMean - em;
-		cout << "MEAN: " << subMean << endl;
-	}
-}
-*/
