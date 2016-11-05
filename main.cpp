@@ -5,21 +5,14 @@
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
+#include "Constants.h"
+#include "Blob.h"
 #include <iostream>
 #include <cmath>
 
-const cv::Scalar GREEN = cv::Scalar(0, 255, 0);
-const cv::Scalar RED = cv::Scalar(0, 0, 255);
 
-const int SPOT_HEIGHT = 40;
-const int SPOT_WIDTH = 25;
 int JUMP = 3;
-const int DILATION_SIZE = 2;
-const int DILATION_TYPE = cv::MORPH_ELLIPSE;
-const int THRESHOLD = 190;
-const float LINE_DISTANCE_THRES = 0.6;
-const float HUE_THESHOLD = 50;
-const float SATURATION_THRESHOLD = 50;
+
 
 double distance(cv::Point2f p0, cv::Point2f p1)
 {
@@ -311,9 +304,21 @@ void PLApplication::analyzeSpot(cv::Rect rect)
 
 int main(int argc, char** argv)
 {
-	cv::Mat image = cv::imread(argv[1]);
+	cv::Mat image = cv::imread("C:/Dev/parking_full.jpg");
 	//The empty image
-	cv::Mat image_empty = cv::imread("lot_empty.jpg");
+	cv::Mat image_empty = cv::imread("C:/Dev/parking_empty.jpg");
+
+	// Check images
+	if (!image.data)
+	{
+		std::cout << "Could not open or find image 1" << std::endl;
+		return -1;
+	}
+	if (!image_empty.data)
+	{
+		std::cout << "Could not open or find image 2" << std::endl;
+		return -1;
+	}
 
 	plapp.init(image, image_empty);
 
@@ -372,6 +377,9 @@ int main(int argc, char** argv)
 
 	plapp.countCars();
 	std::cout << "FOUND " << plapp.getTotalCars() << std::endl;
+
+	// call blob counting function
+	Blob::countCars_blobs(dst_empty, dst);
 
 	cv::waitKey(0);
 	return 0;
