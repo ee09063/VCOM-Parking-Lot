@@ -304,7 +304,7 @@ void PLApplication::analyzeSpot(cv::Rect rect)
 
 int main(int argc, char** argv)
 {
-	cv::Mat image = cv::imread("C:/Dev/parking_full.jpg");
+	cv::Mat image = cv::imread("C:/Dev/lot2.jpg");
 	//The empty image
 	cv::Mat image_empty = cv::imread("C:/Dev/parking_empty.jpg");
 
@@ -354,6 +354,11 @@ int main(int argc, char** argv)
 	warpPerspective(image, dst, h, size);
 	warpPerspective(image_empty, dst_empty, h, size);
 
+	// call blob counting function
+	Blob::countCars_blobs(dst_empty, dst);
+
+	/*
+
 	dst.copyTo(plapp.roi);
 	dst_empty.copyTo(plapp.roi_empty);
 	dst.copyTo(plapp.roi_final);
@@ -378,8 +383,7 @@ int main(int argc, char** argv)
 	plapp.countCars();
 	std::cout << "FOUND " << plapp.getTotalCars() << std::endl;
 
-	// call blob counting function
-	Blob::countCars_blobs(dst_empty, dst);
+	*/
 
 	cv::waitKey(0);
 	return 0;

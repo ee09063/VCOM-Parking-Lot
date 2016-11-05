@@ -24,15 +24,6 @@ Blob::Blob(std::vector<cv::Point> _contour) {
 }
 
 void Blob::countCars_blobs(Mat emptyParking, Mat fullParking) {
-	const int structuringRectSize = 5; // 3, 5, 7
-	const int blurSize = 5;
-
-	const int blobRectAreaLowerLimit = 80;
-	const int blobAspectRatioLowerLimit = 0.15;
-	const int blobAspectRatioUpperLimit = 1.25;
-	const int blobRectMinWidth = 15;
-	const int blobRectMinHeight = 15;
-
 	unsigned int nCars = 0;
 
 	cv::Mat imgDifference;
@@ -54,8 +45,8 @@ void Blob::countCars_blobs(Mat emptyParking, Mat fullParking) {
 	cv::absdiff(emptyParking, fullParking, imgDifference);
 
 	// apply threshold
-	cv::threshold(imgDifference, imgThreshold, 34, 255.0, CV_THRESH_BINARY);
-	// cv::imshow("imgThreshold", imgThreshold);
+	cv::threshold(imgDifference, imgThreshold, 80, 255.0, CV_THRESH_BINARY);
+	cv::imshow("imgThreshold", imgThreshold);
 
 	// get, dilate and erode structuring element
 	cv::Mat structElement = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(structuringRectSize, structuringRectSize));
@@ -69,7 +60,7 @@ void Blob::countCars_blobs(Mat emptyParking, Mat fullParking) {
 	cv::findContours(imgThresholdCopy, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 	cv::Mat imgContours(imgThreshold.size(), CV_8UC3, BLACK);
 	cv::drawContours(imgContours, contours, -1, WHITE, -1);
-	// cv::imshow("imgContours", imgContours);
+	cv::imshow("imgContours", imgContours);
 
 	// find convex hull for each contour
 
@@ -102,7 +93,7 @@ void Blob::countCars_blobs(Mat emptyParking, Mat fullParking) {
 
 	cv::drawContours(convexHulls, hulls, -1, WHITE, -1);
 
-	// cv::imshow("convexHulls", convexHulls);
+	cv::imshow("convexHulls", convexHulls);
 
 	for (auto &blob : blobVec) {
 		cv::rectangle(fullCopy, blob.boundingRect, GREEN, 2);

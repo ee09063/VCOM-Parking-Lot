@@ -20,4 +20,14 @@
 	const float HUE_THESHOLD = 50;
 	const float SATURATION_THRESHOLD = 50;
 
+	// Blob:
+	const int structuringRectSize = 5; // 3, 5, 7
+	const int blurSize = 5;
+
+	const int blobRectAreaLowerLimit = 80;
+	const int blobAspectRatioLowerLimit = 0.15;
+	const int blobAspectRatioUpperLimit = 1.25;
+	const int blobRectMinWidth = 15;
+	const int blobRectMinHeight = 15;
+
 #endif
