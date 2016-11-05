@@ -1,7 +1,6 @@
 /*
-LINE DETECTION IN EMPTY + NON EMPTY -> 2 IMAGE VERSION
+* Program Use: <executable> <image>
 */
-
 #include <opencv2/opencv.hpp>
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
@@ -14,16 +13,13 @@ const cv::Scalar RED = cv::Scalar(0, 0, 255);
 
 const int SPOT_HEIGHT = 40;
 const int SPOT_WIDTH = 25;
-const int CUTOFF = 50;
-const int DISTANCE = 5;
 int JUMP = 3;
-const int EROSION_SIZE = 1;
-const int EROSION_TYPE = cv::MORPH_ELLIPSE;
-const int DILATION_SIZE = 1;
+const int DILATION_SIZE = 2;
 const int DILATION_TYPE = cv::MORPH_ELLIPSE;
-const int THRESHOLD = 125;
+const int THRESHOLD = 190;
 const float LINE_DISTANCE_THRES = 0.6;
-const float SATURATION_THRESHOLD = 55;
+const float HUE_THESHOLD = 50;
+const float SATURATION_THRESHOLD = 50;
 
 double distance(cv::Point2f p0, cv::Point2f p1)
 {
@@ -40,7 +36,8 @@ public:
 	cv::Mat roi_hsv;
 	cv::Mat roi_empty;
 	cv::Mat roi_empty_gray;
-	
+	cv::Mat roi_final;
+
 	std::vector<cv::Point2f> corners;
 	std::vector<cv::Point2f> queues;
 	std::vector<std::vector<cv::Point2f>> parking_lines;
@@ -55,6 +52,7 @@ private:
 	void detectLines();
 	void filterLines();
 	void createSpots();
+	void addLastLine();
 	float averageLineDistancePerQueue(int i);
 	float averageLineDistance();
 	void paintPoint(cv::Point2f point, cv::Scalar color);
@@ -63,6 +61,7 @@ private:
 
 PLApplication plapp;
 
+//Mouse callback to select the 4 initial corners
 void selectCorners(int event, int x, int y, int flags, void* param)
 {
 	if (event == cv::EVENT_LBUTTONDOWN)
@@ -76,12 +75,13 @@ void selectCorners(int event, int x, int y, int flags, void* param)
 	}
 }
 
-void selectSpots(int event, int x, int y, int flags, void* param)
+//Mouse callback to select the queues
+void selectQueues(int event, int x, int y, int flags, void* param)
 {
 	if (event == cv::EVENT_LBUTTONDOWN)
 	{
 		circle(plapp.roi, cv::Point(x, y), 3, RED, 5, CV_AA);
-		cv::imshow("RESULT", plapp.roi);
+		cv::imshow("REGION OF INTEREST", plapp.roi);
 		plapp.queues.push_back(cv::Point2f(x, y));
 	}
 }
@@ -100,11 +100,12 @@ int PLApplication::getTotalCars()
 void PLApplication::paintPoint(cv::Point2f point, cv::Scalar color)
 {
 	circle(roi, point, 2, color, 2, CV_AA);
-	cv::imshow("RESULT", roi);
+	cv::imshow("REGION OF INTEREST", roi);
 	circle(roi_empty, point, 2, color, 2, CV_AA);
-	cv::imshow("RESULT__", roi_empty);
+	cv::imshow("EMPTY REGION OF INTEREST", roi_empty);
 }
 
+//Average distance between each dividing line, per queue
 float PLApplication::averageLineDistancePerQueue(int i)
 {
 	float sum = 0;
@@ -113,7 +114,7 @@ float PLApplication::averageLineDistancePerQueue(int i)
 	for (int k = 0; k < parking_lines[i].size() - 1; k++)
 	{
 		cv::Point2f p1 = parking_lines[i][k];
-		cv::Point2f p2 = parking_lines[i][k+1];
+		cv::Point2f p2 = parking_lines[i][k + 1];
 		sum += distance(p1, p2);
 		number_of_spots += 1.0;
 	}
@@ -121,6 +122,7 @@ float PLApplication::averageLineDistancePerQueue(int i)
 	return sum / number_of_spots;
 }
 
+//Average distance between each dividing line
 float PLApplication::averageLineDistance()
 {
 	float sum = 0;
@@ -139,25 +141,28 @@ float PLApplication::averageLineDistance()
 	return sum / number_of_spots;
 }
 
-
-
+//Executes an horizontal sweep to detect the lines
 void PLApplication::detectLines()
 {
 	cv::Point2f fp, sp;
 	for (int i = 0; i < queues.size(); i++)
 	{
 		parking_lines.push_back(std::vector<cv::Point2f>());
-		cv::Point2f point = queues[i]; // user point
+		// The queue point the user selected
+		cv::Point2f point = queues[i];
+		// This point is always valid 
 		parking_lines[i].push_back(point);
 		cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
 		cv::Rect rectLine;
 		for (;;)
 		{
 			rectLine = cv::Rect(point.x + JUMP, point.y - (SPOT_HEIGHT / 2.0), JUMP, SPOT_HEIGHT);
-			if ((rectLine & rect_mat) == rectLine) // rect is inside image
+			// Check if rectLine is inside the image
+			if ((rectLine & rect_mat) == rectLine)
 			{
 				cv::Mat line = roi_empty_gray(rectLine);
-				if (cv::mean(line)[0] > 0) // found start of line
+				// Check for start of line
+				if (cv::mean(line)[0] > 0)
 				{
 					fp = point;
 					for (;;)
@@ -166,7 +171,8 @@ void PLApplication::detectLines()
 						if ((rectLine & rect_mat) == rectLine)
 						{
 							cv::Mat line = roi_empty_gray(rectLine);
-							if (cv::mean(line)[0] == 0) // found end of line
+							// Check for end of line
+							if (cv::mean(line)[0] == 0)
 							{
 								sp = point;
 								cv::Point2f middle_point = cv::Point2f((fp.x + sp.x) / 2.0, (fp.y + sp.y) / 2.0);
@@ -191,25 +197,27 @@ void PLApplication::detectLines()
 	}
 }
 
+//Filters the lines to remove false positive points
+//by comparing the distance of consecutive points
 void PLApplication::filterLines()
 {
 	std::vector<std::vector<cv::Point2f>> new_parking_lines;
-	//float average = averageLineDistance();
 
 	for (int i = 0; i < parking_lines.size(); i++)
 	{
 		float average = averageLineDistancePerQueue(i);
 		float average_threshold = average * LINE_DISTANCE_THRES;
 		new_parking_lines.push_back(std::vector<cv::Point2f>());
-		
+
 		paintPoint(parking_lines[i][0], GREEN);
-		
+
+		//The user point is always valid
 		new_parking_lines[i].push_back(parking_lines[i][0]);
 
 		for (int k = 0; k < parking_lines[i].size() - 1; k++)
 		{
-			//cv::Point2f p0 = parking_lines[i][k];
-			cv::Point2f p0 = new_parking_lines[i][new_parking_lines[i].size() - 1]; // last valid point added
+			// Compare with the last valid point added
+			cv::Point2f p0 = new_parking_lines[i][new_parking_lines[i].size() - 1];
 			cv::Point2f p1 = parking_lines[i][k + 1];
 			float point_distance = distance(p0, p1);
 			if (point_distance > average_threshold)
@@ -223,6 +231,7 @@ void PLApplication::filterLines()
 	parking_lines = new_parking_lines;
 }
 
+// Create the parking spots based on the parking lines
 void PLApplication::createSpots()
 {
 	cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
@@ -232,23 +241,39 @@ void PLApplication::createSpots()
 		{
 			cv::Point2f p1 = parking_lines[i][k];
 			cv::Point2f p2 = parking_lines[i][k + 1];
-			cv::Rect parking_spot = cv::Rect(p1.x, p1.y - SPOT_HEIGHT / 2.0, distance(p1, p2), SPOT_HEIGHT);
+			cv::Rect parking_spot = cv::Rect(p1.x, p1.y - SPOT_HEIGHT / 2.0, abs(p2.x - p1.x), SPOT_HEIGHT);
 			if ((parking_spot & rect_mat) == parking_spot)
 			{
-				std::cout << "ADDING A SPOT" << std::endl;
 				parking_spots.push_back(parking_spot);
 			}
 		}
 	}
 }
 
+//The last parking spot of the queues doesn't 
+//have a white line on the right side, so add it
+void PLApplication::addLastLine()
+{
+	for (int i = 0; i < parking_lines.size(); i++)
+	{
+		float average_distance = averageLineDistancePerQueue(i);
+		cv::Point last_line = parking_lines[i][parking_lines[i].size() - 1];
+		cv::Point2f last_point = cv::Point2f(last_line.x + average_distance, last_line.y);
+		paintPoint(last_point, GREEN);
+		parking_lines[i].push_back(last_point);
+	}
+}
+
 void PLApplication::countCars()
 {
 	std::cout << "COUNTING CARS" << std::endl;
-	
+
 	detectLines();
 	filterLines();
+	addLastLine();
 	createSpots();
+
+	cvDestroyWindow("REGION OF INTEREST");
 
 	cv::Rect rect_mat(0, 0, roi.cols, roi.rows);
 
@@ -258,28 +283,41 @@ void PLApplication::countCars()
 	}
 }
 
+// Check the parking spots and mark them 
 void PLApplication::analyzeSpot(cv::Rect rect)
 {
 	cv::Mat parking_spot = roi_hsv(rect);
 	cv::Scalar _mean = mean(parking_spot);
-	std::cout << "MEAN :" << _mean << std::endl;
+	float hue = _mean[0];
 	float saturation = _mean[1];
-	if (saturation > SATURATION_THRESHOLD)
+	float value = _mean[2];
+
+	std::cout << "HUE | SATURATION | VALUE: " << _mean << std::endl;
+
+	if (saturation > SATURATION_THRESHOLD || hue > HUE_THESHOLD)
 	{
-		cv::rectangle(roi, rect, GREEN, 2);
-		imshow("RESULT", roi);
+		//Mark a filled spot
+		cv::rectangle(roi_final, rect, GREEN, 2);
+		imshow("FINAL REGION OF INTEREST", roi_final);
 		total_cars++;
+	}
+	else
+	{
+		//Mark an empty spot
+		cv::rectangle(roi_final, rect, RED, 2);
+		imshow("FINAL REGION OF INTEREST", roi_final);
 	}
 }
 
 int main(int argc, char** argv)
 {
 	cv::Mat image = cv::imread(argv[1]);
+	//The empty image
 	cv::Mat image_empty = cv::imread("lot_empty.jpg");
-	
+
 	plapp.init(image, image_empty);
-	
-	std::cout << "Click on four corners -- top left first and bottom left last -- and then hit ENTER" << std::endl;
+
+	std::cout << "Click on four corners -- top left first and bottom left last -- and then hit any Key" << std::endl;
 
 	// Show image and wait for 4 clicks. 
 	cv::imshow("PARKING LOT", plapp.image);
@@ -288,6 +326,7 @@ int main(int argc, char** argv)
 	cv::waitKey(0);
 	cvDestroyWindow("PARKING LOT");
 
+	//Set the size for the region of interest
 	float sizeW = distance(plapp.corners[0], plapp.corners[1]);
 	float sizeH = distance(plapp.corners[1], plapp.corners[2]);
 
@@ -312,19 +351,23 @@ int main(int argc, char** argv)
 
 	dst.copyTo(plapp.roi);
 	dst_empty.copyTo(plapp.roi_empty);
-	// Show image
-	cv::imshow("RESULT", plapp.roi);
-	//GrayScale for thresholding
+	dst.copyTo(plapp.roi_final);
+	// Show REGION OF INTEREST
+	cv::imshow("REGION OF INTEREST", plapp.roi);
+	//GrayScale the empty parking lot for thresholding
 	cv::cvtColor(plapp.roi_empty, plapp.roi_empty_gray, CV_BGR2GRAY);
+	//Convert the non empty region of interest to HSV to detect cars
 	cv::cvtColor(plapp.roi, plapp.roi_hsv, CV_BGR2HSV);
 	cv::threshold(plapp.roi_empty_gray, plapp.roi_empty_gray, THRESHOLD, 255, cv::THRESH_BINARY);
-	
+
+	cv::imshow("GRAY THRESH", plapp.roi_empty_gray);
+
 	cv::Mat dilation_element = cv::getStructuringElement(DILATION_TYPE, cv::Size(2 * DILATION_SIZE + 1, 2 * DILATION_SIZE + 1), cv::Point(DILATION_SIZE, DILATION_SIZE));
 	cv::dilate(plapp.roi_empty_gray, plapp.roi_empty_gray, dilation_element);
 
-	imshow("GRAY", plapp.roi_empty_gray);
+	std::cout << "Click on each queue -- and then hit any Key" << std::endl;
 
-	cv::setMouseCallback("RESULT", selectSpots, 0);
+	cv::setMouseCallback("REGION OF INTEREST", selectQueues, 0);
 	cv::waitKey(0);
 
 	plapp.countCars();
